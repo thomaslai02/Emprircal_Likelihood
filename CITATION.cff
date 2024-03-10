@@ -1,0 +1,21 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Empirical Likelihood
+message: >-
+  If you use this dataset, please cite it using the metadata
+  from this file.
+type: dataset
+authors:
+  - given-names: Thomas
+    family-names: Lai
+    email: tl69916827@gmail.com
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.10802431
+repository-code: >-
+  https://github.com/thomaslai02/Emprircal_Likelihood/tree/main
+keywords:
+  - Empirical likelihood
+date-released: '2024-03-10'
