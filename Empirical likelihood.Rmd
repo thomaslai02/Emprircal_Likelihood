@@ -1,0 +1,645 @@
+---
+title: "Empirical Modelling"
+author: "Thomas Lai"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+set.seed(1)
+require(pracma)
+require(dplyr)
+require(nleqslv)
+require(latex2exp)
+require(ggplot2)
+require(GGally)
+```
+
+```{r }
+obs <- c(4.81, -1.24, 1.30, -0.23, 2.98 ,-1.13, -8.32, 2.62, -0.79, -2.85)
+obs_2 <-  c(0.07, 1.54, 0.38, -2.76, -8.82, 1.86, -4.75, 4.81, 1.14, -0.66)
+L_cauchy <- c()
+L_cauchy_2 <- c()
+theta <- seq(-2,2,length.out=50)
+for (t in theta) {
+  L_cauchy <- c(L_cauchy,prod(1/(pi*(1+(obs-t)^2))))
+  L_cauchy_2 <- c(L_cauchy_2,prod(1/(pi*(1+(obs_2-t)^2))))
+}
+
+print(c(theta[which.max(L_cauchy)],theta[which.max(L_cauchy_2)]))
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/cauchy.png")
+plot(theta,L_cauchy,type="l",ylim=c(0,max(L_cauchy_2)),
+     xlab =TeX(r"($\theta$)"),ylab="Likelihood")
+lines(theta,L_cauchy_2,lty=4)
+#dev.off()
+```
+
+
+
+
+```{r generated data}
+data <-  rnorm(100,mean=1,sd=0.1)
+data <- sort(data)
+mu <- 10
+```
+
+```{r ecdf}
+cdf <- function(data,x) {
+  n <- length(data)
+  sum(data<x)/n
+}
+cdf(data,10)
+```
+
+```{r weight}
+# The inefficient method
+n <- length(data)
+g <- function(x,mu,lambda) sum((x-mu)/(1+lambda*(x-mu)))
+mu_norm <- seq(1-0.4/10, 1+0.4/10, length.out=100)
+loglik_norm <- c()
+
+for (mu in mu_norm){
+  lambda <- uniroot(g, c((1-1/n)/(mu-data[n]),
+                         (1-1/n)/(mu-data[1])),tol = 1e-3,x=data,mu=mu, extendInt = "yes")$root
+  
+  w <- (1/n)*1/(1+lambda*(data-mu))
+  loglik_norm <- c(loglik_norm,sum(log(n*w)))
+}
+plot(mu_norm, exp(loglik_norm))
+#ggplot(data_norm, aes(mu_norm, V2))
+```
+
+```{r bat data}
+
+data_bat <- c(62,52,68,23,34,45,27,42,83,56,40)
+n_bat <- length(data_bat)
+mu_bat <- mean(data_bat)
+sd_bat <- sd(data_bat)
+data_bat <- sort(data_bat)
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/densbat.png")
+plot(density(data_bat),main="")
+#dev.off()
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/qqbat.png")
+qqnorm(data_bat)
+#dev.off()
+```
+
+```{r emp bat}
+loglik <- c()
+mus <- seq(mu_bat-4*sd_bat/sqrt(n_bat), mu_bat+4*sd_bat/sqrt(n_bat), length.out=100)
+
+for (mu_est in mus){
+  lambda_bat <- uniroot(g, c((1-1/n_bat)/(mu_est-data_bat[n_bat]),
+                             (1-1/n_bat)/(mu_est-data_bat[1])),tol = 1e-3,
+                        x=data_bat,mu=mu_est, extendInt = "yes")$root
+
+  w_bat <- (1/n_bat)*1/(1+lambda_bat*(data_bat-mu_est))
+  loglik <- c(loglik,sum(log(n_bat*w_bat)))
+}
+spl <- splinefun(mus,loglik)
+conf_func <- function(x) exp(spl(x))-exp(-(1/2)*qchisq(0.95,1))
+conf_int_bat <- c(uniroot(conf_func,interval=c(min(mus),mu_bat))$root,
+              uniroot(conf_func,interval=c(mu_bat,max(mus)))$root)
+print(conf_int_bat)
+#plot(mus,exp(spl(mus)))
+```
+
+```{r Huber M}
+MAD <- mad(data_bat)
+phi_zi <- function(X,mu,sigma,c=1.35) {
+  Z <- (X-mu)/sigma
+  phi <- c()
+  for (z in Z){
+    if (z <= -c) phi <- c(phi,-c)
+    else if (z >= c) phi <- c(phi,c)
+    else if (abs(z) <= c) phi <- c(phi,z)
+  }
+  return(phi)
+  }
+
+Huber_g_2 <- function(data,mu,sigma,L) {
+  z <- phi_zi(data,mu,sigma)
+  return(c(sum(z/(1+L[1]*z+L[2]*(z^2-1))),sum((z^2-1)/(1+L[1]*z+L[2]*(z^2-1)))))
+}
+
+sigmas <- seq(MAD-5,MAD+5, length.out=100)
+
+loglik_m <- c()
+for (sigma in sigmas){
+  L_m <- c()
+  for (mu_est in mus) {
+    lamb_del <- nleqslv(x=c(0,0),fn=Huber_g_2,data=data_bat,mu=mu_est,sigma=sigma,
+                        method="Newton")$x
+    z <- phi_zi(data_bat,mu_est,sigma)
+    w_bat <- (1/n_bat)*(1/(1+lamb_del[1]*z+lamb_del[2]*(z^2-1)))
+    L_m <- c(L_m,sum(log(n_bat*w_bat)))
+  }
+  loglik_m <- cbind(loglik_m,(L_m))
+}
+loglik_m <- apply(loglik_m,1,max)
+
+spl_batm <- splinefun(mus,loglik_m)
+conf_func_m <- function(x) exp(spl_batm(x))-exp(-(1/2)*qchisq(0.95,1))
+conf_int_batm <- c(uniroot(conf_func_m,interval=c(min(mus),mu_bat), extendInt = "yes")$root,
+              uniroot(conf_func_m,interval=c(mu_bat,max(mus)), extendInt = "yes")$root)
+print(conf_int_batm)
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/huber.png")
+plot(mus,exp(spl_batm(mus)),type="l", xlab="mu",ylab="Likelihood",col="red")
+lines(mus,exp(spl(mus)))
+abline(h=exp(-(1/2)*qchisq(0.95,1)),lty=2)
+legend(29,1,legend=c("Huber M-Estimate","Mean"),lty=c(1,1),col=c("red","black"))
+#dev.off()
+```
+
+
+```{r profile-lik}
+prof_log <- c()
+naive <- c()
+M_est <- c()
+
+for (mu_est in mus){
+  sigma_mu2 <- sum((data_bat-mu_est)^2)
+  prof_log <- c(prof_log,-(n_bat/2)*log(sigma_mu2/n_bat))
+  naive <- c(naive,-(n_bat/2)*log(sum((data_bat-mu_bat)^2)/n_bat)-sigma_mu2/(2*sum((data_bat-mu_bat)^2)/n_bat))
+}
+conf_int_norm <- c(mu_bat-1.96*sd_bat/sqrt(n_bat),mu_bat+1.96*sd_bat/sqrt(n_bat))
+print(conf_int_norm)
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/Profile_bat.png")
+plot(mus,exp(spl(mus)),type="l",
+     xlab="mu",ylab="Likelihood",col="red")
+lines(mus,exp(prof_log-max(prof_log)),col="cyan4")
+lines(mus,exp(naive-max(naive)),lty=3)
+abline(h=exp(-(1/2)*qchisq(0.95,1)),lty=2)
+legend(29,1,legend=c("Empirical","Normal","Naive"),lty=c(1,1,3),col=c("red","cyan4","black"))
+#dev.off()
+```
+
+
+```{r bootstrap}
+alpha <- seq(-4/(sd_bat*sqrt(n_bat)),4/(sd_bat*sqrt(n_bat)),length.out=100)
+
+loglik_EB <- c()
+theta_1 <- c()
+for (a in alpha) {
+  theta_1 <- c(theta_1,sum(data_bat*exp(a*data_bat))/sum(exp(a*data_bat)))
+  loglik_EB <- c(loglik_EB,n_bat*(a*mu_bat-log((1/n_bat)*sum(exp(a*data_bat)))))
+}
+```
+
+```{r bootstrap vs emp}
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/Bootstrap_bat.png")
+plot(mus,exp(spl(mus)),type="l",xlab="mu",ylab="Likelihood")
+lines(theta_1,exp(loglik_EB),lty=2)
+legend(29,1,legend=c("Empirical","Saddlepoint"),lty=c(1,2))
+#dev.off()
+```
+
+```{r light}
+data_light <- c(28,-44,29,30,26,27,22,23,33,16,24,29,24,40,21,31,34,-2,25,19)
+n_light <- length(data_light)
+mu_light <- mean(data_light)
+data_light <- sort(data_light)
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/histlight.png")
+hist(data_light,xlab="Passage Time",main="")
+#dev.off()
+```
+
+
+```{r emp light}
+loglik_light <- c()
+mu_L <- seq(-20,35, length.out=100)
+
+for (mu_est in mu_L){
+  lambda_L <- uniroot(g, c((1-1/n_light)/(mu_est-data_light[n_light]),
+                             (1-1/n_light)/(mu_est-data_light[1])),tol = 1e-3,
+                        x=data_light,mu=mu_est, extendInt = "yes")$root
+
+  w_L <- (1/n_light)*1/(1+lambda_L*(data_light-mu_est))
+  loglik_light <- c(loglik_light,sum(log(n_light*w_L)))
+}
+spl_L <- splinefun(mu_L,loglik_light)
+conf_func <- function(x) exp(spl_L(x))-exp(-(1/2)*qchisq(0.95,1))
+conf_int_L <- c(uniroot(conf_func,interval=c(min(mu_L),mu_light), extendInt = "yes")$root,
+              uniroot(conf_func,interval=c(mu_light,max(mu_L)), extendInt = "yes")$root)
+print(conf_int_L)
+#plot(mu_L,exp(spl_L(mu_L)),type="l")
+```
+
+
+```{r huber light}
+sigmas <- seq(3,5, length.out=100)
+mu_Lm <- seq(-20,35,length.out=100)
+loglik_m <- c()
+for (mu_est in mu_Lm){
+  L_m <- c()
+  for (sigma in sigmas) {
+    lamb_del <- nleqslv(x=c(0,0),fn=Huber_g_2,data=data_light,mu=mu_est,
+                        sigma=sigma,method="Broyden",control = list(xtol=1e-3))$x
+    z <- phi_zi(data_light,mu_est,sigma)
+    w_L <- (1/n_light)*(1/(1+lamb_del[1]*z+lamb_del[2]*(z^2-1)))
+    L_m <- c(L_m,sum(log(n_light*w_L)))
+  }
+  loglik_m <- c(loglik_m,max(L_m))
+} 
+
+spl_Lm <- splinefun(mu_Lm,loglik_m)
+conf_func_m <- function(x) exp(spl_Lm(x))-exp(-(1/2)*qchisq(0.95,1))
+conf_int_Lm <- c(uniroot(conf_func_m,interval=c(min(mu_Lm),mu_light), extendInt = "yes")$root,
+              uniroot(conf_func_m,interval=c(mu_light+2,max(mu_Lm)), extendInt = "yes")$root)
+```
+
+```{r huberlight plots}
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/huberlight.png")
+plot(mu_Lm,exp(spl_Lm(mu_L)),type="l",xlab=TeX(r"($\mu$)"),ylab="Likelihood")
+lines(mu_L,exp(spl_L(mu_L)),lty=3)
+legend(-20,1,legend=c("Huber M-estimate","Mean"),lty=c(1,3))
+abline(h=-(1/2)*qchisq(0.95,1),lty=2)
+abline(v=33.02,lty=2)
+#dev.off()
+```
+
+```{r prof light}
+sd_light <- sd(data_light)
+prof_log_light <- c()
+for (mu_est in mu_L) {
+  sigma_mu2 <- sum((data_light-mu_est)^2)
+  prof_log_light <- c(prof_log_light,-(n_light/2)*log(sigma_mu2/n_light))
+}
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/lightnorm.png")
+plot(mu_L,exp(prof_log_light-max(prof_log_light)),type="l",
+     xlab=TeX(r"($\mu$)"),ylab="Likelihood")
+abline(h=exp(-(1/2)*qchisq(0.95,1)),lty=2)
+#dev.off()
+conf_int_norm <- c(mu_light-1.96*sd_light/sqrt(n_light),mu_light+1.96*sd_light/sqrt(n_light))
+print(conf_int_norm)
+```
+
+
+```{r rolls data}
+# no_fault~roll_length
+roll_length <- c(551,651,832,375,715,868,271,630,491,372,645,441,895,458,642,492,543,842,
+                 905,542,522,122,657,170,738,371,735,749,495,716,952,417)
+no_fault <- c(6,4,17,9,14,8,5,7,7,7,6,8,28,4,10,4,
+              8,9,23,9,6,1,9,4,9,14,17,10,7,3,9,2)
+data_roll <- cbind(roll_length,no_fault)
+```
+
+```{r Poisson}
+n_roll <- nrow(data_roll)
+beta_0 <- mean(no_fault)/mean(roll_length)
+sd_roll <- sqrt(1/(n_roll*(mean(roll_length)^2/mean(no_fault))))
+
+
+beta_grid <- seq(0.012,0.0184,length.out=1000)
+
+loglik_pois <- c()
+for (beta in beta_grid) {
+  loglik_pois <- c(loglik_pois,-n_roll*beta*mean(roll_length)+log(beta)*n_roll*mean(no_fault))
+}
+
+conf_int_pois_beta <- c(beta_0-1.96*sd_roll,beta_0+1.96*sd_roll)
+print(conf_int_pois_beta)
+
+#plot(beta_grid,exp(loglik_pois-max(loglik_pois)))
+```
+
+
+
+```{r emp regression}
+reg <- function(x,y,beta,lambda) sum((y-beta*x)/(1+lambda*(y-beta*x)))
+search <- function(beta,x,y,n=n_roll) (1-1/n)/(beta*x-y)
+
+
+loglik_emp_pois <- c()
+for (beta in beta_grid){
+  interval <- c(search(beta,min(roll_length),max(no_fault)),
+                                   search(beta,max(roll_length),min(no_fault)))
+  lambda_roll <- uniroot(reg,
+                         interval = interval,
+                         tol = 1e-3, x=roll_length,y=no_fault,beta=beta, extendInt = "yes")$root
+
+  w_roll <- (1/n_roll)*1/(1+lambda_roll*(no_fault-beta*roll_length))
+  loglik_emp_pois <- c(loglik_emp_pois,sum(log(n_roll*w_roll)))
+}
+
+spl_pois <- splinefun(beta_grid,loglik_emp_pois)
+conf_func_pois <- function(x) exp(spl_pois(x))-exp(-(1/2)*qchisq(0.95,1))
+conf_int_pois <- c(uniroot(conf_func_pois,interval=c(min(beta_grid),beta_0))$root,
+              uniroot(conf_func_pois,interval=c(beta_0,max(beta_grid)))$root)
+print(conf_int_pois)
+
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/emp_reg.png")
+plot(beta_grid,exp(spl_pois(beta_grid)),type="l",xlab="mu",ylab="Likelihood")
+lines(beta_grid,exp(loglik_pois-max(loglik_pois)),lty=2)
+abline(h=exp(-(1/2)*qchisq(0.95,1)))
+legend(0.012,1,legend=c("Empirical","Poisson"),lty=c(1,2))
+#dev.off()
+```
+
+
+```{r CI}
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/glm.png", width=640,height=640)
+glm_reg <- glm(no_fault~roll_length-1,family=poisson(identity))
+par(mfrow=c(2,2))
+plot(glm_reg)
+#dev.off()
+```
+
+```{r Bootstrap regression}
+v <- mean(roll_length)
+sd_roll <- sqrt((1/(n_roll*v^2))*sum((no_fault-beta_0*roll_length)^2))
+
+alpha <- seq(-3/(sd_roll*sqrt(n_roll)),3/(sd_roll*sqrt(n_roll)),length.out=100)
+
+beta_saddle <- c()
+
+loglik_EB_pois <- c()
+theta <- c()
+for (a in alpha) {
+  n_a <- sum(exp((a/v)*(no_fault-beta_0*roll_length)))
+  x_a <- sum(roll_length*exp((a/v)*(no_fault-beta_0*roll_length)))/n_a
+  y_a <- sum(no_fault*exp((a/v)*(no_fault-beta_0*roll_length)))/n_a
+  beta_saddle <- c(beta_saddle,y_a/x_a)
+  loglik_EB_pois <- c(loglik_EB_pois,log(x_a)-n_roll*log(n_a))
+}
+
+#plot(beta_saddle,exp(loglik_EB_pois-max(loglik_EB_pois)))
+```
+
+
+```{r saddle Vs emp regression}
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/saddlereg.png")
+plot(beta_grid,exp(loglik_emp_pois),type="l",xlab=TeX(r"($\beta$)"),ylab="Likelihood")
+lines(beta_saddle,exp(loglik_EB_pois-max(loglik_EB_pois)),lty=3)
+legend(0.012,1,legend=c("Empirical","Saddlpoint"),lty=c(1,3))
+#dev.off()
+```
+
+```{r eda reg}
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/edareg.png")
+plot(roll_length,no_fault,pch=19, xlab="Roll length",ylab="No. of faults")
+abline(a=0,b=glm_reg$coefficients)
+abline(a=0,b=conf_int_pois_beta[1],lty=3)
+abline(a=0,b=conf_int_pois_beta[2],lty=3)
+abline(a=0,b=conf_int_pois[1],lty=5)
+abline(a=0,b=conf_int_pois[2],lty=5)
+#dev.off()
+```
+
+
+```{r vector}
+log_star <- function(n,X,mu,lambda) {
+  z <- 1+t(lambda)%*%(X-mu)
+  if (z>=1/n){
+    return(log(z))}
+  if (z<1/n) { 
+    return(log(1/n)-1.5+2*n*z-((n*z)^2)/2)
+  }
+}
+
+log_star_prime <- function(n,X,mu,lambda) {
+  z <- 1+t(lambda)%*%(X-mu)
+  if (z>=1/n){
+    return(1/z)}
+  if (z<1/n) {
+    return(2*n-(n^2)*z)
+  }
+}
+
+log_star_dprime <- function(n,X,mu,lambda) {
+  z <- 1+t(lambda)%*%(X-mu)
+  if (z>=1/n){
+    return(-(z^(-2)))}
+  if (z<1/n) {
+    return(-n^2)
+  }
+}
+
+```
+
+```{r LoL data}
+LoL_1 <- read.csv("stats1.csv")
+LoL_2 <- read.csv("stats2.csv")
+```
+
+```{r LoL}
+data_LoL <- as.matrix(rbind(LoL_1,LoL_2) %>% select("totdmgtochamp","goldearned"))
+data_LoL <- data_LoL[seq(1, nrow(data_LoL), 100),]
+n_lol <- nrow(data_LoL)
+mu_lol <- colMeans(data_LoL)
+sd_dmg <- sd(data_LoL[,1])
+sd_gold <- sd(data_LoL[,2])
+
+dmg_grid <- seq(mu_lol[1]-4*sd_dmg/sqrt(n_lol), mu_lol[1]+4*sd_dmg/sqrt(n_lol), length.out=50)
+gold_grid <- seq(mu_lol[2]-4*sd_gold/sqrt(n_lol), mu_lol[2]+4*sd_gold/sqrt(n_lol), length.out=50)
+
+loglik_lol <- matrix(0,length(dmg_grid),length(gold_grid))
+a <- 1
+for (dmg in dmg_grid) {
+  b <- 1
+  for (gold in gold_grid) {
+    mu_lol <- c(dmg,gold)
+    lambda <- as.vector(rep(0,ncol(data_LoL)))
+
+    eps <- 1e-3
+    dx <- 10
+    while (dx>eps) {
+        J <- matrix(0,n_lol,ncol(data_LoL))
+  
+        for (i in 1:n_lol) {
+          J[i,] <- sqrt(-log_star_dprime(n_lol,data_LoL[i,],mu_lol,lambda))%*%
+            t(data_LoL[i,]-mu_lol)
+        }
+    
+        y <- rep(0,n_lol)
+        for (i in 1:n_lol) {
+          y[i] <- log_star_prime(n_lol,data_LoL[i,],mu_lol,lambda)/
+            sqrt(-log_star_dprime(n_lol,data_LoL[i,],mu_lol,lambda))
+        }
+        
+      lambda_k <- lambda + inv(t(J)%*%J)%*%t(J)%*%y
+      dx <- sqrt(sum(lambda_k-lambda)^2)
+      lambda <- lambda_k
+    }
+    
+    L_lol <- 0
+    for (i in 1:n_lol) {
+      L_lol <- L_lol - log_star(n_lol,data_LoL[i,],mu_lol,lambda)
+    }
+    loglik_lol[a,b] <- L_lol
+    b <- b+1
+  }
+  a <- a+1
+}
+```
+
+```{r plotting}
+levels <- exp((-1/2)*c(qchisq(0.5,2),qchisq(0.9,2),qchisq(0.95,2),qchisq(0.99,2)))
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/contour.png")
+contour(dmg_grid,gold_grid,exp(loglik_lol),levels=levels,xlab="Dmg",ylab="Gold",labcex=0.8)
+#dev.off() 
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/persp.png")
+persp(dmg_grid,gold_grid,exp(loglik_lol),zlim=c(0,1),xlab="Dmg",ylab="Gold",zlab="Likelihood")
+#dev.off()
+``` 
+
+```{r LoL vis}
+data_LoL <- as.matrix(rbind(LoL_1,LoL_2) %>% select("totdmgtochamp","goldearned"))
+data_LoL <- data_LoL[seq(1, nrow(data_LoL), 100),]
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/lolpairs.png")
+ggpairs(data_LoL,columnLabels=c("Dmg","Gold")) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+panel.background = element_blank(), axis.line = element_line(colour = "black"))
+#dev.off()
+```
+
+```{r cricket data}
+cps <- c(20,16,19.8,18.4,17.1,15.5,14.7,17.1,15.4,16.2,15,17.2,16,17,14.4)
+temp <- c(88.6,71.6,93.3,84.3,80.6,75.2,69.7,82,69.4,83.3,79.6,82.6,80.6,83.5,76.3)
+data_c <- cbind(cps,temp)
+```
+
+```{r chirp anal}
+require(emplik)
+n_c <- nrow(data_c)
+mu_c <- colMeans(data_c)
+sd_c <- sd(data_c[,1])
+sd_temp <- sd(data_c[,2])
+
+cps_grid <- seq(mu_c[1]-4*sd_c/sqrt(n_c), mu_c[1]+4*sd_c/sqrt(n_c), length.out=100)
+temp_grid <- seq(mu_c[2]-4*sd_temp/sqrt(n_c), mu_c[2]+4*sd_temp/sqrt(n_c), length.out=100)
+
+loglik_c <- matrix(0,length(cps_grid),length(temp_grid))
+a <- 1
+for (cps in cps_grid) {
+  b <- 1
+  for (temp in temp_grid) {
+    mu_c <- c(cps,temp)
+    #lambda <- rep(0,ncol(data_c))
+#     eps <- 1e-3
+#     d_x <- 10
+#     while (d_x>=eps) {
+    #   d_x <- sqrt(sum(lambda_k-lambda)^2)
+    #   J <- matrix(0,n_c,ncol(data_c))
+    # 
+    #   for (i in 1:n_c) {
+    #     J[i,] <- sqrt(-log_star_dprime(n_c,data_c[i,],mu_c,lambda))%*%
+    #       t(data_c[i,]-mu_c)
+    #   }
+    # 
+    #   y <- rep(0,n_c)
+    #   for (i in 1:n_c) {
+    #     y[i] <- log_star_prime(n_c,data_c[i,],mu_c,lambda)/
+    #       sqrt(-log_star_dprime(n_c,data_c[i,],mu_c,lambda))
+    #   }
+    #   
+    #   lambda_k <- lambda + inv(t(J)%*%J)%*%t(J)%*%y
+    #   lambda <- lambda_k
+    # }
+    lambda <- el.test(data_c,mu_c)$lambda
+
+    L_c <- 0
+    for (i in 1:n_c) {
+      L_c <- L_c - log_star(n_c,data_c[i,],mu_c,lambda)
+    }
+    
+    loglik_c[a,b] <- L_c
+    b <- b+1
+    
+  }
+  a <- a+1
+}
+```
+
+```{r cricket plot}
+levels <- exp((-1/2)*c(qchisq(0.5,2),qchisq(0.9,2),qchisq(0.95,2),qchisq(0.99,2)))
+#png(filename=
+#      "C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/contourcricket.png")
+plot(cps, temp, pch = 19,xlab="Cps",ylab="Temperature",)
+contour(cps_grid,temp_grid,exp(loglik_c),levels=levels,labcex=0.8,add=TRUE)
+#dev.off()
+
+#png(filename=
+#      "C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/perspcricket.png")
+persp(cps_grid,temp_grid,exp(loglik_c),zlim=c(0,1),xlab="Cps",ylab="Temperature",zlab="Likelihood")
+#dev.off()
+```
+
+
+```{r ducks data}
+plumage <- c(7,13,14,6,14,15,4,8,7,9,14)
+b_index <- c(3,10,11,5,15,15,7,10,4,9,11)
+data_d <- cbind(plumage,b_index)
+```
+
+```{r duck anal}
+n_d <- nrow(data_d)
+mu_d <- colMeans(data_d)
+sd_p <- sd(data_d[,1])
+sd_b <- sd(data_d[,2])
+
+p_grid <- seq(mu_d[1]-4*sd_p/sqrt(n_d), mu_d[1]+4*sd_p/sqrt(n_d), length.out=100)
+b_grid <- seq(mu_d[2]-4*sd_b/sqrt(n_d), mu_d[2]+4*sd_b/sqrt(n_d), length.out=100)
+
+loglik_d <- matrix(0,length(p_grid),length(b_grid))
+a <- 1
+for (plu in p_grid) {
+  b <- 1
+  for (b_ind in b_grid) {
+    mu_d <- c(plu,b_ind)
+    # lambda <- rep(-1,ncol(data_d))
+    # J <- matrix(0,n_d,ncol(data_d))
+    # 
+    # for (i in 1:n_d) {
+    #   J[i,] <- sqrt(-log_star_dprime(n_d,data_d[i,],mu_c,lambda))%*%
+    #     t(data_d[i,]-mu_d)
+    # }
+    # 
+    # y <- rep(0,n_d)
+    # for (i in 1:n_d) {
+    #   y[i] <- log_star_prime(n_d,data_d[i,],mu_d,lambda)/
+    #     sqrt(-log_star_dprime(n_d,data_d[i,],mu_d,lambda))
+    # }
+    # 
+    # eps <- 0.1
+    # dx <- 10
+    # while (dx>=eps) {
+    #   lambda_k <- lambda + inv(t(J)%*%J)%*%t(J)%*%y
+    #   dx <- sqrt(sum(lambda_k-lambda)^2)
+    #   lambda <- lambda_k
+    # }
+    lambda <-el.test(data_d,mu_d)$lambda
+
+    L_d <- 0
+    for (i in 1:n_d) {
+      L_d <- L_d - log_star(n_d,data_d[i,],mu_d,lambda)
+    }
+    
+    loglik_d[a,b] <- L_d
+    b <- b+1
+  }
+  a <- a+1
+}
+```
+
+```{r duck plot}
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/contourduck.png")
+plot(plumage, b_index, pch = 19,xlab="Plumage",ylab="Behaviour")
+contour(p_grid,b_grid,exp(loglik_d),levels=levels,labcex=0.8,add=TRUE)
+#dev.off()
+
+#png(filename="C:/Users/tl699/OneDrive - University of Edinburgh/Documents/UoE/Y5/Dissertation/perspduck.png")
+persp(p_grid,b_grid,exp(loglik_d),zlim=c(0,1),xlab="PLumage",ylab="Behaviour",zlab="Likelihood")
+#dev.off()
+```
